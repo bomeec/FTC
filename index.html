@@ -285,6 +285,42 @@
       .list-row select[data-key="type"] {
         width: 104px;
       }
+      /* 코트 라운드별 역할 격자 */
+      #courtList {
+        overflow-x: auto;
+      }
+      .court-grid-head {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 6px;
+        font-size: 11px;
+        color: var(--muted);
+        min-width: max-content;
+      }
+      .court-name-spacer {
+        width: 130px;
+        flex: none;
+      }
+      .round-col {
+        width: 64px;
+        flex: none;
+        text-align: center;
+      }
+      .del-spacer {
+        width: 34px;
+        flex: none;
+      }
+      .court-row {
+        min-width: max-content;
+      }
+      .court-name-input {
+        width: 130px;
+        flex: none !important;
+      }
+      select.round-col {
+        padding: 6px 4px;
+      }
       .icon-btn {
         background: transparent;
         border: 1px solid var(--line);
@@ -419,6 +455,16 @@
         <div class="field-row">
           <label for="roundsInput">라운드 수</label>
           <input type="number" id="roundsInput" min="1" max="30" />
+        </div>
+        <div class="field-row">
+          <label for="minGamesInput">premium 최소 게임</label>
+          <input type="number" id="minGamesInput" min="0" max="30" />
+          <span class="hint" style="margin:0">0이면 보장 끔</span>
+        </div>
+        <div class="field-row">
+          <label for="minGuestGamesInput">guest 최소 게임</label>
+          <input type="number" id="minGuestGamesInput" min="0" max="30" />
+          <span class="hint" style="margin:0">0이면 보장 끔</span>
         </div>
 
         <div class="section-title">
@@ -667,12 +713,30 @@
       // ---------------- 설정 모달 ----------------
       const backdrop = document.getElementById("modalBackdrop");
       const roundsInput = document.getElementById("roundsInput");
+      const minGamesInput = document.getElementById("minGamesInput");
+      const minGuestGamesInput = document.getElementById("minGuestGamesInput");
       const courtList = document.getElementById("courtList");
       const memberList = document.getElementById("memberList");
       const countNote = document.getElementById("countNote");
 
       // 모달에서 편집 중인 작업본 (저장 전까지 원본에 반영하지 않음)
       let draft = null;
+
+      // 코트의 roles 배열을 라운드 수에 맞춰 정규화한다.
+      // 기존 role(단일값) 또는 짧은 roles 배열을 rounds 길이에 맞춰 채운다.
+      function normalizeCourtRoles(court, rounds) {
+        let roles;
+        if (Array.isArray(court.roles) && court.roles.length > 0) {
+          roles = court.roles.slice();
+        } else {
+          roles = [court.role ?? "게임"];
+        }
+        // 길이 맞추기: 모자라면 마지막 값 반복, 넘치면 자름
+        while (roles.length < rounds) roles.push(roles[roles.length - 1]);
+        roles.length = rounds;
+        court.roles = roles;
+        delete court.role; // 편집 중에는 roles 배열만 사용
+      }
 
       function openSettings() {
         // 현재 데이터를 깊은 복사해 편집 작업본으로 사용
@@ -681,7 +745,12 @@
         draft.members.forEach((m) => {
           if (!m.type) m.type = "guest";
         });
-        roundsInput.value = draft.info?.rounds ?? 1;
+        const rounds = draft.info?.rounds ?? 1;
+        draft.courts.forEach((c) => normalizeCourtRoles(c, rounds));
+        roundsInput.value = rounds;
+        // 최소 게임 보장 값 (기본 premium 3, guest 2).
+        minGamesInput.value = draft.info?.minGames ?? 3;
+        minGuestGamesInput.value = draft.info?.minGuestGames ?? 2;
         renderDraft();
         backdrop.classList.add("open");
       }
@@ -692,20 +761,38 @@
       }
 
       function renderDraft() {
-        // 코트 목록
-        courtList.innerHTML = draft.courts
-          .map(
-            (c, i) => `
-          <div class="list-row">
-            <input data-court="${i}" data-key="name" value="${c.name ?? ""}" placeholder="코트 이름" />
-            <select data-court="${i}" data-key="role">
-              <option value="게임" ${c.role === "게임" ? "selected" : ""}>게임</option>
-              <option value="랠리" ${c.role === "랠리" ? "selected" : ""}>랠리</option>
-            </select>
+        const rounds = draft.info?.rounds ?? 1;
+
+        // 라운드 헤더 (코트 이름 칸 너비만큼 띄우고 R1..Rn 라벨)
+        const roundHeader = `
+          <div class="court-grid-head">
+            <span class="court-name-spacer">코트</span>
+            ${Array.from({ length: rounds }, (_, r) => `<span class="round-col">R${r + 1}</span>`).join("")}
+            <span class="del-spacer"></span>
+          </div>`;
+
+        // 코트 목록: 코트 이름 + 라운드별 역할 드롭다운 + 삭제
+        courtList.innerHTML =
+          roundHeader +
+          draft.courts
+            .map((c, i) => {
+              const roleSelects = (c.roles || [])
+                .map(
+                  (role, r) => `
+                <select class="round-col" data-court="${i}" data-role-round="${r}">
+                  <option value="게임" ${role === "게임" ? "selected" : ""}>게임</option>
+                  <option value="랠리" ${role === "랠리" ? "selected" : ""}>랠리</option>
+                </select>`
+                )
+                .join("");
+              return `
+          <div class="list-row court-row">
+            <input class="court-name-input" data-court="${i}" data-key="name" value="${c.name ?? ""}" placeholder="코트 이름" />
+            ${roleSelects}
             <button class="icon-btn del" data-del-court="${i}">✕</button>
-          </div>`
-          )
-          .join("");
+          </div>`;
+            })
+            .join("");
 
         // 멤버 목록
         memberList.innerHTML = draft.members
@@ -756,19 +843,20 @@
         countNote.textContent = msg;
       }
 
-      // 입력 변경을 작업본에 반영 (이벤트 위임)
-      courtList.addEventListener("input", (e) => {
-        const el = e.target;
+      // 코트 입력/역할 변경을 작업본에 반영 (이벤트 위임)
+      function applyCourtChange(el) {
         const idx = el.dataset.court;
         if (idx === undefined) return;
-        draft.courts[+idx][el.dataset.key] = el.value;
-      });
-      courtList.addEventListener("change", (e) => {
-        const el = e.target;
-        const idx = el.dataset.court;
-        if (idx === undefined) return;
-        draft.courts[+idx][el.dataset.key] = el.value;
-      });
+        if (el.dataset.roleRound !== undefined) {
+          // 라운드별 역할 드롭다운
+          draft.courts[+idx].roles[+el.dataset.roleRound] = el.value;
+        } else if (el.dataset.key) {
+          // 코트 이름
+          draft.courts[+idx][el.dataset.key] = el.value;
+        }
+      }
+      courtList.addEventListener("input", (e) => applyCourtChange(e.target));
+      courtList.addEventListener("change", (e) => applyCourtChange(e.target));
       courtList.addEventListener("click", (e) => {
         const idx = e.target.dataset.delCourt;
         if (idx === undefined) return;
@@ -797,9 +885,10 @@
 
       document.getElementById("addCourtBtn").addEventListener("click", () => {
         const n = draft.courts.length + 1;
+        const rounds = draft.info?.rounds ?? 1;
         draft.courts.push({
           name: `court_${String(n).padStart(2, "0")}`,
-          role: "게임",
+          roles: Array.from({ length: rounds }, () => "게임"),
         });
         renderDraft();
       });
@@ -810,14 +899,41 @@
 
       roundsInput.addEventListener("input", () => {
         if (!draft.info) draft.info = {};
-        draft.info.rounds = Math.max(1, Number(roundsInput.value) || 1);
+        const rounds = Math.max(1, Number(roundsInput.value) || 1);
+        draft.info.rounds = rounds;
+        // 라운드 수가 바뀌면 각 코트의 roles 길이를 다시 맞추고 격자를 다시 그린다.
+        draft.courts.forEach((c) => normalizeCourtRoles(c, rounds));
+        renderDraft();
       });
 
+      minGamesInput.addEventListener("input", () => {
+        if (!draft.info) draft.info = {};
+        draft.info.minGames = Math.max(0, Number(minGamesInput.value) || 0);
+      });
+      minGuestGamesInput.addEventListener("input", () => {
+        if (!draft.info) draft.info = {};
+        draft.info.minGuestGames = Math.max(0, Number(minGuestGamesInput.value) || 0);
+      });
+
+      // draft 를 저장용으로 정리: 빈 항목 제거 + 코트 roles 를 단순화.
+      // 모든 라운드 역할이 같으면 role 단일값으로, 다르면 roles 배열로 저장.
+      function cleanDraft(d) {
+        const out = JSON.parse(JSON.stringify(d));
+        out.members = out.members.filter((m) => m.name.trim() !== "");
+        out.courts = out.courts
+          .filter((c) => c.name.trim() !== "")
+          .map((c) => {
+            const roles = c.roles || [];
+            const allSame = roles.every((x) => x === roles[0]);
+            if (roles.length === 0) return { name: c.name, role: "게임" };
+            if (allSame) return { name: c.name, role: roles[0] };
+            return { name: c.name, roles };
+          });
+        return out;
+      }
+
       document.getElementById("saveBtn").addEventListener("click", () => {
-        // 빈 이름 멤버/코트는 제외하고 저장
-        draft.members = draft.members.filter((m) => m.name.trim() !== "");
-        draft.courts = draft.courts.filter((c) => c.name.trim() !== "");
-        infoData = JSON.parse(JSON.stringify(draft));
+        infoData = cleanDraft(draft);
         saveToStorage(infoData);
         closeSettings();
         render(randomSeed());
@@ -833,13 +949,7 @@
       });
 
       document.getElementById("downloadBtn").addEventListener("click", () => {
-        const data = draft
-          ? {
-              ...draft,
-              members: draft.members.filter((m) => m.name.trim() !== ""),
-              courts: draft.courts.filter((c) => c.name.trim() !== ""),
-            }
-          : infoData;
+        const data = draft ? cleanDraft(draft) : infoData;
         const blob = new Blob([JSON.stringify(data, null, 4)], {
           type: "application/json",
         });

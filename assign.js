@@ -112,6 +112,8 @@ function checkPremiumConstraints(assignments, members, minGames, minGuestGames =
   const violations = [];
   for (const [name, s] of stat) {
     if (s.type === "premium") {
+      // minGames <= 0 이면 premium 보장 전체 비활성(복식/혼복/게임 모두 검사 안 함).
+      if (minGames <= 0) continue;
       const singles = s.gender === "M" ? s.남복 : s.여복;
       const singlesLabel = s.gender === "M" ? "남복" : "여복";
       if (singles < 1) violations.push(`${name}: ${singlesLabel} 0회`);
@@ -248,6 +250,21 @@ function splitTeams(players) {
 }
 
 /**
+ * 코트의 특정 라운드 역할을 반환한다.
+ * - court.roles (배열)가 있으면 라운드별 역할. 길이가 모자라면 마지막 값을 반복.
+ * - 없으면 court.role (단일 값) 사용. 그것도 없으면 "게임".
+ * @param {Object} court
+ * @param {number} roundIdx - 0-indexed 라운드
+ */
+function courtRoleForRound(court, roundIdx) {
+  if (Array.isArray(court.roles) && court.roles.length > 0) {
+    const idx = Math.min(roundIdx, court.roles.length - 1);
+    return court.roles[idx];
+  }
+  return court.role ?? "게임";
+}
+
+/**
  * 한 번의 배정 결과를 생성한다 (제약 검사는 하지 않음).
  * @param {Object} info
  * @param {Object} [options] - { seed }
@@ -261,92 +278,107 @@ function generateOnce(info, options = {}) {
   // premium 제약과 충돌해 배정이 불가능할 때 호출자가 false 로 완화할 수 있다.
   const enforceRallyToGame = options.enforceRallyToGame ?? true;
 
-  // 역할별 코트 인덱스 (랠리 / 게임)
-  const rallyCourtIdx = [];
-  const gameCourtIdx = [];
-  courts.forEach((c, i) => {
-    if (c.role === "랠리") rallyCourtIdx.push(i);
-    else gameCourtIdx.push(i);
-  });
-
-  // 게임 코트는 항상 4명(복식). 랠리 코트는 4명 이하 허용(남는 인원 흡수).
-  const gameSeats = gameCourtIdx.length * COURT_SIZE;
-  const maxCapacity = gameSeats + rallyCourtIdx.length * COURT_SIZE;
-
-  if (members.length < gameSeats) {
-    throw new Error(
-      `멤버 수(${members.length})가 게임 코트 좌석(${gameCourtIdx.length}코트 × ${COURT_SIZE} = ${gameSeats})보다 적습니다. ` +
-        `게임 코트는 4명이 꽉 차야 하므로 최소 ${gameSeats}명이 필요합니다.`
-    );
-  }
-  if (members.length > maxCapacity) {
-    throw new Error(
-      `멤버 수(${members.length})가 최대 수용 인원(${maxCapacity}명)을 초과합니다. ` +
-        `코트를 늘리거나 멤버를 줄여주세요.`
-    );
-  }
-
-  // 랠리 코트에 들어갈 총 인원 (게임 좌석을 채우고 남는 인원).
-  // 0 이면 이 라운드에 랠리 코트는 운영하지 않는다.
-  const rallyTotal = members.length - gameSeats; // 0 ~ rallyCourtIdx.length*4
-  const useRally = rallyTotal > 0 && rallyCourtIdx.length > 0;
-
   const males = members.filter((p) => p.gender === "M");
   const females = members.filter((p) => p.gender === "W");
 
-  // --- 게임 코트 성별 계획 ---
-  // 랠리에 남녀 몇 명을 보낼지 먼저 정하고, 나머지로 게임 코트 성별 계획을 세운다.
-  // 홀수(남3여1/여3남1)를 랠리로 흡수시켜 게임 코트를 최대한 짝수 구성으로 만든다.
-  // rallyMale: 랠리에 보낼 남성 수 (0 ~ min(rallyTotal, males.length))
-  // 게임 코트 남성 수 = males.length - rallyMale, 이 값으로 findGenderPlan 가능해야 함.
-  // 가능한 (게임 코트 성별 계획, 랠리 남성 수) 후보를 모두 모은다.
-  // 랠리 남성 수(rallyMale)에 따라 게임 코트의 성별 구성이 달라진다.
-  // 라운드마다 가용 인원 상황에 맞는 후보를 골라 유연하게 배정한다.
-  function collectPlans(preferSingles) {
-    const gameCourtCount = gameCourtIdx.length;
-    const candidates = []; // { plan, rallyMale, rallyFemale, oddCount }
-    const minRM = Math.max(0, rallyTotal - females.length);
-    const maxRM = Math.min(rallyTotal, males.length);
-    for (let rallyMale = minRM; rallyMale <= maxRM; rallyMale++) {
-      const rallyFemale = rallyTotal - rallyMale;
-      const gMale = males.length - rallyMale;
-      const gFemale = females.length - rallyFemale;
-      if (gMale < 0 || gFemale < 0) continue;
-      if (gMale + gFemale !== gameCourtCount * COURT_SIZE) continue;
-      let plan;
-      if (preferSingles) {
-        plan = findGenderPlanWithSingles(gMale, gFemale, gameCourtCount);
-        if (!plan) continue;
-      } else {
-        plan = findGenderPlan(gMale, gFemale, gameCourtCount);
-      }
-      candidates.push({
-        plan,
-        rallyMale,
-        rallyFemale,
-        oddCount: plan.filter(isOddCourt).length,
-      });
-    }
-    // 게임 코트 홀수가 적은(=랠리가 홀수 흡수) 후보를 앞에 둔다.
-    candidates.sort((a, b) => a.oddCount - b.oddCount);
-    return candidates;
-  }
+  // 라운드별 역할 구성(랠리/게임 코트 인덱스, 좌석 수, 성별 계획 후보)을 계산한다.
+  // court.roles 로 라운드마다 역할이 달라질 수 있으므로 라운드별로 계산한다.
+  // 같은 역할 구성은 캐시해서 재계산을 피한다.
+  const planCache = new Map();
 
-  const basePlans = collectPlans(false);
-  if (basePlans.length === 0) {
-    throw new Error("현재 멤버 성비로 게임 코트 구성을 만들 수 없습니다.");
+  function buildRoundConfig(roundIdx) {
+    const rallyCourtIdx = [];
+    const gameCourtIdx = [];
+    courts.forEach((c, i) => {
+      if (courtRoleForRound(c, roundIdx) === "랠리") rallyCourtIdx.push(i);
+      else gameCourtIdx.push(i);
+    });
+
+    const cacheKey = gameCourtIdx.join(",") + "|" + rallyCourtIdx.join(",");
+    if (planCache.has(cacheKey)) return planCache.get(cacheKey);
+
+    const gameSeats = gameCourtIdx.length * COURT_SIZE;
+    const maxCapacity = gameSeats + rallyCourtIdx.length * COURT_SIZE;
+
+    if (members.length < gameSeats) {
+      throw new Error(
+        `라운드 ${roundIdx + 1}: 멤버 수(${members.length})가 게임 코트 좌석(${gameCourtIdx.length}코트 × ${COURT_SIZE} = ${gameSeats})보다 적습니다.`
+      );
+    }
+    if (members.length > maxCapacity) {
+      throw new Error(
+        `라운드 ${roundIdx + 1}: 멤버 수(${members.length})가 최대 수용 인원(${maxCapacity}명)을 초과합니다.`
+      );
+    }
+
+    const rallyTotal = members.length - gameSeats;
+    const useRally = rallyTotal > 0 && rallyCourtIdx.length > 0;
+
+    // 게임 코트 성별 계획 후보 수집 (랠리 남성 수에 따른 조합).
+    const collectPlans = (preferSingles) => {
+      const gameCourtCount = gameCourtIdx.length;
+      const candidates = [];
+      const minRM = Math.max(0, rallyTotal - females.length);
+      const maxRM = Math.min(rallyTotal, males.length);
+      for (let rallyMale = minRM; rallyMale <= maxRM; rallyMale++) {
+        const rallyFemale = rallyTotal - rallyMale;
+        const gMale = males.length - rallyMale;
+        const gFemale = females.length - rallyFemale;
+        if (gMale < 0 || gFemale < 0) continue;
+        if (gMale + gFemale !== gameCourtCount * COURT_SIZE) continue;
+        let plan;
+        if (preferSingles) {
+          plan = findGenderPlanWithSingles(gMale, gFemale, gameCourtCount);
+          if (!plan) continue;
+        } else {
+          plan = findGenderPlan(gMale, gFemale, gameCourtCount);
+        }
+        candidates.push({
+          plan,
+          rallyMale,
+          rallyFemale,
+          oddCount: plan.filter(isOddCourt).length,
+        });
+      }
+      candidates.sort((a, b) => a.oddCount - b.oddCount);
+      return candidates;
+    };
+
+    const basePlans = collectPlans(false);
+    if (basePlans.length === 0) {
+      throw new Error(
+        `라운드 ${roundIdx + 1}: 현재 멤버 성비로 게임 코트 구성을 만들 수 없습니다.`
+      );
+    }
+    const singlesPlans = collectPlans(true);
+
+    const config = {
+      rallyCourtIdx,
+      gameCourtIdx,
+      useRally,
+      basePlans,
+      singlesPlans,
+    };
+    planCache.set(cacheKey, config);
+    return config;
   }
-  const singlesPlans = collectPlans(true);
 
   const seed = options.seed ?? Date.now();
   const rng = createRng(seed);
 
-  // 전체 라운드 중 "남복+여복 포함(singlesPlan)"을 적용할 라운드를 하나 고른다.
-  // 그 라운드 하나에서 남복과 여복이 동시에 등장하므로 "최소 1회씩" 조건이 충족된다.
-  let singlesRound = -1;
-  if (singlesPlans.length > 0 && rounds >= 1) {
-    singlesRound = Math.floor(rng() * rounds);
-  }
+  // 라운드별 역할 구성을 미리 계산 (검증 포함).
+  const roundConfigs = [];
+  for (let r = 0; r < rounds; r++) roundConfigs.push(buildRoundConfig(r));
+
+  // "남복+여복 포함(singlesPlan)"을 적용할 라운드를 하나 고른다.
+  // singlesPlan 이 가능한(게임 코트 2개 이상) 라운드 중에서만 선택한다.
+  const singlesCandidates = roundConfigs
+    .map((cfg, i) => (cfg.singlesPlans.length > 0 ? i : -1))
+    .filter((i) => i >= 0);
+  const singlesRound =
+    singlesCandidates.length > 0
+      ? singlesCandidates[Math.floor(rng() * singlesCandidates.length)]
+      : -1;
 
   const result = [];
   let prevRallyNames = new Set(); // 직전 라운드에 랠리 코트에 있던 사람 이름
@@ -356,6 +388,10 @@ function generateOnce(info, options = {}) {
   members.forEach((p) => gameCount.set(p.name, 0));
 
   for (let r = 0; r < rounds; r++) {
+    // 이 라운드의 역할 구성.
+    const { rallyCourtIdx, gameCourtIdx, useRally, basePlans, singlesPlans } =
+      roundConfigs[r];
+
     // 이 라운드에 사용할 게임 코트 성별 계획 후보를 고른다.
     const useSingles = r === singlesRound && singlesPlans.length > 0;
     const pool = useSingles ? singlesPlans : basePlans;
@@ -448,14 +484,15 @@ function generateOnce(info, options = {}) {
     const roundCourts = courts
       .map((court, courtIndex) => {
         const players = assignment[courtIndex] || [];
-        const isRally = court.role === "랠리";
+        const role = courtRoleForRound(court, r); // 이 라운드의 역할
+        const isRally = role === "랠리";
 
         if (isRally) {
           // 랠리 코트: 팀 분할 없이 명단만. 인원이 0이면 생략.
           if (players.length === 0) return null;
           return {
             court: court.name,
-            role: court.role,
+            role,
             type: "랠리",
             odd: false,
             players,
@@ -468,7 +505,7 @@ function generateOnce(info, options = {}) {
         const { teamA, teamB } = splitTeams(players);
         return {
           court: court.name,
-          role: court.role,
+          role,
           type: courtTypeLabel(maleCount),
           odd: isOddCourt(maleCount),
           teamA,
@@ -517,13 +554,20 @@ function assignCourts(info, options = {}) {
   const members = info?.members ?? [];
   const hasPremium = members.some((m) => m.type === "premium");
   const hasGuest = members.some((m) => m.type !== "premium");
-  const minGames = options.minGames ?? 3; // premium 목표 게임 횟수
-  const minGuestGames = options.minGuestGames ?? 2; // guest 목표 게임 횟수
+  // 최소 게임 횟수: options > info.info 설정 > 기본값 순으로 결정.
+  // 0 이면 해당 보장을 끈다(premium 은 성별복식/혼복 검사도 함께 비활성).
+  const cfg = info?.info ?? {};
+  const minGames = options.minGames ?? cfg.minGames ?? 3; // premium 목표 게임 횟수
+  const minGuestGames = options.minGuestGames ?? cfg.minGuestGames ?? 2; // guest 목표
   const maxAttempts = options.maxAttempts ?? 1500;
   const baseSeed = options.seed ?? Date.now();
 
+  // 각 보장의 활성 여부.
+  const premiumGuarantee = hasPremium && minGames > 0;
+  const guestGuarantee = hasGuest && minGuestGames > 0;
+
   // 검사할 제약이 전혀 없으면 한 번만 생성.
-  if (!hasPremium && !(hasGuest && minGuestGames > 0)) {
+  if (!premiumGuarantee && !guestGuarantee) {
     return generateOnce(info, { seed: baseSeed });
   }
 
@@ -531,8 +575,10 @@ function assignCourts(info, options = {}) {
   // 목표 제약에서 시작해, 통과하는 단계가 없으면 제약을 한 단계씩 낮춰 재시도한다.
   // 각 단계: 랠리→게임 규칙(enforce), premium 게임 목표(pg), guest 게임 목표(gg).
   // 완화한 내용은 결과 warning 에 기록한다.
-  const pg0 = minGames;
-  const gg0 = hasGuest ? minGuestGames : 0;
+  const pg0 = premiumGuarantee ? minGames : 0;
+  const gg0 = guestGuarantee ? minGuestGames : 0;
+  // premium 완화 하한: 보장이 켜져 있으면 최소 2까지 낮춤, 꺼졌으면 0 고정.
+  const pgMin = premiumGuarantee ? 2 : 0;
 
   // 완화 단계 정의 (위에서부터 시도, 통과 시 즉시 반환).
   // 완화 강도가 약한 것부터: (랠리규칙, premium게임, guest게임) 순서로 점점 낮춘다.
@@ -549,11 +595,13 @@ function assignCourts(info, options = {}) {
   };
 
   // guest 목표를 바깥 루프(덜 중요하게 마지막에 낮춤)로, premium 목표를 그 안에서 낮춘다.
-  for (let gg = gg0; gg >= Math.min(gg0, 1) && gg >= 0; gg--) {
-    for (let pg = pg0; pg >= 2; pg--) {
+  const ggFloor = gg0 > 0 ? 1 : 0; // guest 보장이 켜지면 최소 1까지 낮춤
+  for (let gg = gg0; gg >= ggFloor; gg--) {
+    for (let pg = pg0; pg >= pgMin; pg--) {
       for (const enforce of [true, false]) {
         stages.push({ enforce, pg, gg, note: relaxNote(enforce, pg, gg) });
       }
+      if (pgMin === pg0) break; // premium 보장 꺼짐: pg 루프 1회만
     }
     if (gg === 0) break;
   }
