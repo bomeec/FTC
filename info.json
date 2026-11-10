@@ -29,16 +29,16 @@
             "name":"유민", "gender":"W", "type":"premium"
         },
         {
+            "name":"효정", "gender":"W", "type":"premium"
+        },
+        {
+            "name":"성현", "gender":"W", "type":"premium"
+        },
+        {
             "name":"게스트1", "gender":"M", "type":"guest"
         },
         {
-            "name":"게스트2", "gender":"M", "type":"guest"
-        },
-        {
-            "name":"게스트3", "gender":"W", "type":"guest"
-        },
-        {
-            "name":"게스트4", "gender":"W", "type":"guest"
+            "name":"게스트2", "gender":"W", "type":"guest"
         }
 
     ],
