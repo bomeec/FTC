@@ -75,17 +75,25 @@ function categoryOf(court) {
 }
 
 /**
- * premium 멤버 제약을 검사한다.
+ * 멤버 제약을 검사한다.
  *  - 남성 premium: 남복 >= 1, 혼복 >= 1, 게임 코트 참여 >= minGames
  *  - 여성 premium: 여복 >= 1, 혼복 >= 1, 게임 코트 참여 >= minGames
+ *  - guest: 게임 코트 참여 >= minGuestGames (0 이면 검사 안 함)
  *
+ * @param {Array} assignments
+ * @param {Array} members
+ * @param {number} minGames - premium 최소 게임 횟수
+ * @param {number} [minGuestGames=0] - guest 최소 게임 횟수 (0 이면 비활성)
  * @returns {{ ok: boolean, violations: string[] }}
  */
-function checkPremiumConstraints(assignments, members, minGames) {
-  const premium = members.filter((m) => m.type === "premium");
+function checkPremiumConstraints(assignments, members, minGames, minGuestGames = 0) {
+  // premium + guest 모두 게임 횟수를 추적한다.
   const stat = new Map();
-  for (const p of premium) {
-    stat.set(p.name, { 남복: 0, 여복: 0, 혼복: 0, 잡복: 0, game: 0, gender: p.gender });
+  for (const p of members) {
+    stat.set(p.name, {
+      남복: 0, 여복: 0, 혼복: 0, 잡복: 0, game: 0,
+      gender: p.gender, type: p.type,
+    });
   }
 
   for (const round of assignments) {
@@ -103,11 +111,18 @@ function checkPremiumConstraints(assignments, members, minGames) {
 
   const violations = [];
   for (const [name, s] of stat) {
-    const singles = s.gender === "M" ? s.남복 : s.여복;
-    const singlesLabel = s.gender === "M" ? "남복" : "여복";
-    if (singles < 1) violations.push(`${name}: ${singlesLabel} 0회`);
-    if (s.혼복 < 1) violations.push(`${name}: 혼복 0회`);
-    if (s.game < minGames) violations.push(`${name}: 게임 ${s.game}회(<${minGames})`);
+    if (s.type === "premium") {
+      const singles = s.gender === "M" ? s.남복 : s.여복;
+      const singlesLabel = s.gender === "M" ? "남복" : "여복";
+      if (singles < 1) violations.push(`${name}: ${singlesLabel} 0회`);
+      if (s.혼복 < 1) violations.push(`${name}: 혼복 0회`);
+      if (s.game < minGames) violations.push(`${name}: 게임 ${s.game}회(<${minGames})`);
+    } else {
+      // guest: 게임 최소 횟수만 검사 (minGuestGames > 0 일 때)
+      if (minGuestGames > 0 && s.game < minGuestGames) {
+        violations.push(`${name}(guest): 게임 ${s.game}회(<${minGuestGames})`);
+      }
+    }
   }
   return { ok: violations.length === 0, violations };
 }
@@ -242,6 +257,9 @@ function generateOnce(info, options = {}) {
   const rounds = info?.info?.rounds ?? 1;
   const members = info?.members ?? [];
   const courts = info?.courts ?? [];
+  // 랠리→다음 라운드 게임 규칙을 강제할지 여부 (기본 true).
+  // premium 제약과 충돌해 배정이 불가능할 때 호출자가 false 로 완화할 수 있다.
+  const enforceRallyToGame = options.enforceRallyToGame ?? true;
 
   // 역할별 코트 인덱스 (랠리 / 게임)
   const rallyCourtIdx = [];
@@ -333,6 +351,10 @@ function generateOnce(info, options = {}) {
   const result = [];
   let prevRallyNames = new Set(); // 직전 라운드에 랠리 코트에 있던 사람 이름
 
+  // 멤버별 누적 게임 코트 참여 횟수 (공정성: 적게 한 사람을 다음 라운드 게임에 우선).
+  const gameCount = new Map();
+  members.forEach((p) => gameCount.set(p.name, 0));
+
   for (let r = 0; r < rounds; r++) {
     // 이 라운드에 사용할 게임 코트 성별 계획 후보를 고른다.
     const useSingles = r === singlesRound && singlesPlans.length > 0;
@@ -351,20 +373,32 @@ function generateOnce(info, options = {}) {
     // 랠리→게임 규칙: 직전 랠리 참가자는 이번 라운드에 게임 코트로 가야 한다.
     // 따라서 게임 코트에 직전 랠리 참가자를 "우선" 배치하고, 랠리 코트에는
     // 직전 랠리가 아닌(allowed) 사람 중에서, guest 를 우선으로 채운다.
+    // 랠리 배치용: 게임을 "많이" 한 사람을 랠리로 먼저 보낸다(공정성). 동률이면 guest 우선.
     const byGuestFirst = (arr) =>
-      arr.slice().sort((a, b) => guestRank(a) - guestRank(b));
+      arr.slice().sort((a, b) => {
+        if (guestRank(a) !== guestRank(b)) return guestRank(a) - guestRank(b);
+        return gameCount.get(b.name) - gameCount.get(a.name);
+      });
 
     // 게임용 우선순위(앞일수록 게임 코트에 먼저 들어감):
     //   1) 직전 랠리 참가자 (랠리→게임 규칙상 반드시 게임)
     //   2) premium (게임 횟수 확보를 위해 게임 선호)
     //   3) guest (남는 자리는 랠리로 — guest 가 랠리를 더 많이 맡음)
+    // 같은 그룹 안에서는 지금까지 게임을 "적게" 한 사람을 앞에 둬 공정하게 돌린다.
     const gamePriority = (p) => {
-      if (prevRallyNames.has(p.name)) return 0;
+      // 랠리→게임 규칙을 강제할 때만 직전 랠리 참가자를 최우선 게임 배치.
+      if (enforceRallyToGame && prevRallyNames.has(p.name)) return 0;
       if (p.type === "premium") return 1;
       return 2;
     };
     const orderGameFirst = (arr) =>
-      arr.slice().sort((a, b) => gamePriority(a) - gamePriority(b));
+      arr.slice().sort((a, b) => {
+        if (gamePriority(a) !== gamePriority(b)) {
+          return gamePriority(a) - gamePriority(b);
+        }
+        // 게임을 적게 한 사람을 게임에 우선. 동률이면 랜덤(셔플 순서 유지).
+        return gameCount.get(a.name) - gameCount.get(b.name);
+      });
 
     const mPool = orderGameFirst(shuffle(males, rng));
     const wPool = orderGameFirst(shuffle(females, rng));
@@ -446,8 +480,18 @@ function generateOnce(info, options = {}) {
     // 코트 이름 순으로 정렬해 출력 일관성 유지
     roundCourts.sort((a, b) => a.court.localeCompare(b.court));
 
+    // 이번 라운드 게임 코트 참가자의 누적 게임 횟수를 올린다(공정성 추적).
+    for (const c of roundCourts) {
+      if (c.role === "랠리") continue;
+      for (const p of [...c.teamA, ...c.teamB]) {
+        gameCount.set(p.name, (gameCount.get(p.name) || 0) + 1);
+      }
+    }
+
     result.push({ round: r + 1, courts: roundCourts });
-    prevRallyNames = curRallyNames;
+    // 규칙을 강제하는 경우에만 직전 랠리 명단을 넘긴다.
+    // 완화 모드에서는 빈 Set 으로 두어 랠리 제약을 없앤다.
+    prevRallyNames = enforceRallyToGame ? curRallyNames : new Set();
   }
 
   return result;
@@ -455,47 +499,93 @@ function generateOnce(info, options = {}) {
 
 /**
  * info 데이터를 기반으로 라운드별 코트 배정을 생성한다.
- * premium 멤버 제약(남/여복 >=1, 혼복 >=1, 게임 코트 >= minGames)을 만족하도록
- * 여러 번 생성해 보고, 만족하는 결과를 반환한다. 끝까지 못 찾으면 위반이 가장 적은
- * 결과를 반환하고 결과 객체에 warning 을 담는다.
+ * 목표 제약(premium 게임 >= minGames, guest 게임 >= minGuestGames, 성별복식·혼복 >=1)을
+ * 만족하도록 여러 번 생성한다. 목표를 못 맞추면 제약을 단계적으로 완화하며 재시도하고,
+ * 완화한 내용을 결과의 warning 에 기록한다.
+ *
+ * 완화 순서: 랠리→게임 규칙 해제 → premium 게임 목표 1씩 하향(최소 2) → guest 게임 목표 1씩 하향.
  *
  * @param {Object} info
  * @param {Object} [options]
  * @param {number} [options.seed] - 시작 시드 (재현용)
- * @param {number} [options.minGames] - premium 최소 게임 코트 횟수 (기본 3)
- * @param {number} [options.maxAttempts] - 최대 재시도 횟수 (기본 2000)
- * @returns {Array} 라운드 배열 (제약 미충족 시 .warning 속성이 붙을 수 있음)
+ * @param {number} [options.minGames] - premium 최소 게임 횟수 (기본 3)
+ * @param {number} [options.minGuestGames] - guest 최소 게임 횟수 (기본 2)
+ * @param {number} [options.maxAttempts] - 단계별 최대 재시도 횟수 (기본 1500)
+ * @returns {Array} 라운드 배열 (완화/미충족 시 .warning 속성이 붙을 수 있음)
  */
 function assignCourts(info, options = {}) {
   const members = info?.members ?? [];
   const hasPremium = members.some((m) => m.type === "premium");
-  const minGames = options.minGames ?? 3;
-  const maxAttempts = options.maxAttempts ?? 2000;
+  const hasGuest = members.some((m) => m.type !== "premium");
+  const minGames = options.minGames ?? 3; // premium 목표 게임 횟수
+  const minGuestGames = options.minGuestGames ?? 2; // guest 목표 게임 횟수
+  const maxAttempts = options.maxAttempts ?? 1500;
   const baseSeed = options.seed ?? Date.now();
 
-  // premium 이 없으면 제약 검사 없이 한 번만 생성.
-  if (!hasPremium) {
+  // 검사할 제약이 전혀 없으면 한 번만 생성.
+  if (!hasPremium && !(hasGuest && minGuestGames > 0)) {
     return generateOnce(info, { seed: baseSeed });
+  }
+
+  // --- 단계적 완화 탐색 ---
+  // 목표 제약에서 시작해, 통과하는 단계가 없으면 제약을 한 단계씩 낮춰 재시도한다.
+  // 각 단계: 랠리→게임 규칙(enforce), premium 게임 목표(pg), guest 게임 목표(gg).
+  // 완화한 내용은 결과 warning 에 기록한다.
+  const pg0 = minGames;
+  const gg0 = hasGuest ? minGuestGames : 0;
+
+  // 완화 단계 정의 (위에서부터 시도, 통과 시 즉시 반환).
+  // 완화 강도가 약한 것부터: (랠리규칙, premium게임, guest게임) 순서로 점점 낮춘다.
+  // 같은 목표라도 랠리→게임 규칙은 ON(지킴)을 먼저, 안 되면 OFF(완화)를 시도한다.
+  const stages = [];
+  const relaxNote = (enforce, pg, gg) => {
+    const parts = [];
+    if (!enforce) parts.push("'랠리→다음 라운드 게임' 규칙 완화");
+    if (pg < pg0) parts.push(`premium 최소 게임 ${pg}회`);
+    if (gg < gg0) parts.push(`guest 최소 게임 ${gg}회`);
+    return parts.length
+      ? `제약을 만족시키기 위해 ${parts.join(", ")}로 조정했습니다.`
+      : null;
+  };
+
+  // guest 목표를 바깥 루프(덜 중요하게 마지막에 낮춤)로, premium 목표를 그 안에서 낮춘다.
+  for (let gg = gg0; gg >= Math.min(gg0, 1) && gg >= 0; gg--) {
+    for (let pg = pg0; pg >= 2; pg--) {
+      for (const enforce of [true, false]) {
+        stages.push({ enforce, pg, gg, note: relaxNote(enforce, pg, gg) });
+      }
+    }
+    if (gg === 0) break;
   }
 
   let bestResult = null;
   let fewestViolations = Infinity;
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    // 시도마다 시드를 바꿔 서로 다른 배정을 만든다.
-    const seed = (baseSeed + attempt * 2654435761) >>> 0;
-    const result = generateOnce(info, { seed });
-    const { ok, violations } = checkPremiumConstraints(result, members, minGames);
+  for (const stage of stages) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const seed = (baseSeed + attempt * 2654435761) >>> 0;
+      const result = generateOnce(info, {
+        seed,
+        enforceRallyToGame: stage.enforce,
+      });
+      const { ok, violations } = checkPremiumConstraints(
+        result,
+        members,
+        stage.pg,
+        stage.gg
+      );
 
-    if (ok) {
-      return result; // 제약을 모두 만족하는 첫 결과를 채택
-    }
-    if (violations.length < fewestViolations) {
-      fewestViolations = violations.length;
-      bestResult = result;
-      bestResult.warning =
-        `premium 제약을 완전히 만족하는 배정을 ${maxAttempts}회 내에 찾지 못했습니다. ` +
-        `가장 근접한 결과를 표시합니다. 위반: ${violations.join(" / ")}`;
+      if (ok) {
+        if (stage.note) result.warning = stage.note;
+        return result;
+      }
+      if (violations.length < fewestViolations) {
+        fewestViolations = violations.length;
+        bestResult = result;
+        bestResult.warning =
+          `모든 제약을 만족하는 배정을 찾지 못했습니다. 가장 근접한 결과를 표시합니다. ` +
+          `위반: ${violations.join(" / ")}`;
+      }
     }
   }
 
