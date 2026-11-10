@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>코트 배정 - matchCourt</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --card: #1a1e27;
+        --card-2: #222838;
+        --text: #e6e9ef;
+        --muted: #9aa3b2;
+        --accent: #4f8cff;
+        --male: #3b82f6;
+        --female: #ec4899;
+        --odd: #f59e0b;
+        --line: #2a3142;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.5;
+      }
+      header {
+        padding: 24px 20px 8px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 16px;
+        justify-content: space-between;
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0;
+      }
+      .controls {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      button {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        padding: 9px 16px;
+        border-radius: 8px;
+        font-size: 14px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      button:hover {
+        filter: brightness(1.08);
+      }
+      .seed-box {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 12px 20px 60px;
+      }
+      .summary {
+        color: var(--muted);
+        font-size: 13px;
+        margin: 4px 0 20px;
+      }
+      .round {
+        margin-bottom: 28px;
+      }
+      .round-title {
+        font-size: 15px;
+        font-weight: 700;
+        margin: 0 0 12px;
+        color: var(--muted);
+        letter-spacing: 0.5px;
+      }
+      .courts {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 14px;
+      }
+      .court {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px 16px;
+      }
+      .court.odd {
+        border-color: var(--odd);
+      }
+      .court-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      .court-name {
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .court-role {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .badge {
+        font-size: 12px;
+        font-weight: 700;
+        padding: 3px 9px;
+        border-radius: 999px;
+        background: var(--card-2);
+        color: var(--muted);
+      }
+      .badge.odd {
+        background: rgba(245, 158, 11, 0.15);
+        color: var(--odd);
+      }
+      .badge.md {
+        background: rgba(59, 130, 246, 0.16);
+        color: #93c5fd;
+      }
+      .badge.wd {
+        background: rgba(236, 72, 153, 0.16);
+        color: #f9a8d4;
+      }
+      .badge.xd {
+        background: rgba(34, 197, 94, 0.16);
+        color: #86efac;
+      }
+      .teams {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .team {
+        flex: 1;
+        background: var(--card-2);
+        border-radius: 8px;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .vs {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .player {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 14px;
+      }
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        flex: none;
+      }
+      .dot.M {
+        background: var(--male);
+      }
+      .dot.W {
+        background: var(--female);
+      }
+      .error {
+        background: rgba(239, 68, 68, 0.12);
+        border: 1px solid #ef4444;
+        color: #fca5a5;
+        padding: 14px 16px;
+        border-radius: 10px;
+      }
+      .legend {
+        display: flex;
+        gap: 16px;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 18px;
+        flex-wrap: wrap;
+      }
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      button.secondary {
+        background: var(--card-2);
+        color: var(--text);
+        border: 1px solid var(--line);
+      }
+      /* --- 설정 모달 --- */
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: none;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 40px 16px;
+        overflow-y: auto;
+        z-index: 100;
+      }
+      .modal-backdrop.open {
+        display: flex;
+      }
+      .modal {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        width: 100%;
+        max-width: 640px;
+        padding: 22px 24px 24px;
+      }
+      .modal h2 {
+        margin: 0 0 4px;
+        font-size: 18px;
+      }
+      .modal .hint {
+        color: var(--muted);
+        font-size: 12px;
+        margin: 0 0 18px;
+      }
+      .field-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .field-row label {
+        font-size: 14px;
+        min-width: 80px;
+      }
+      input,
+      select {
+        background: var(--card-2);
+        border: 1px solid var(--line);
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 7px;
+        font-size: 14px;
+      }
+      input[type="number"] {
+        width: 90px;
+      }
+      .section-title {
+        font-size: 14px;
+        font-weight: 700;
+        margin: 18px 0 10px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .list-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .list-row input {
+        flex: 1;
+      }
+      .list-row select {
+        width: 72px;
+        flex: none;
+      }
+      .list-row select[data-key="type"] {
+        width: 104px;
+      }
+      .icon-btn {
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        padding: 6px 10px;
+        border-radius: 7px;
+        font-weight: 700;
+        line-height: 1;
+      }
+      .icon-btn.del:hover {
+        border-color: #ef4444;
+        color: #fca5a5;
+      }
+      .add-btn {
+        background: transparent;
+        border: 1px dashed var(--line);
+        color: var(--muted);
+        font-weight: 600;
+        padding: 7px 12px;
+      }
+      .modal-actions {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 22px;
+        flex-wrap: wrap;
+      }
+      .modal-actions .left,
+      .modal-actions .right {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .count-note {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 6px;
+      }
+      .count-note.bad {
+        color: #fca5a5;
+      }
+      /* --- 멤버별 게임 수 통계 --- */
+      .stats-title {
+        font-size: 15px;
+        font-weight: 700;
+        margin: 8px 0 12px;
+        color: var(--muted);
+        letter-spacing: 0.5px;
+      }
+      .stats-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        font-size: 14px;
+      }
+      .stats-table th,
+      .stats-table td {
+        padding: 10px 12px;
+        text-align: center;
+        border-bottom: 1px solid var(--line);
+      }
+      .stats-table th {
+        background: var(--card-2);
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .stats-table td.name {
+        text-align: left;
+        font-weight: 600;
+      }
+      .stats-table tr:last-child td {
+        border-bottom: none;
+      }
+      .stats-table td.total {
+        font-weight: 700;
+      }
+      .stats-table .num.zero {
+        color: #4b5566;
+      }
+      .name-cell {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .tag-premium {
+        font-size: 10px;
+        font-weight: 800;
+        background: linear-gradient(135deg, #f59e0b, #fbbf24);
+        color: #1a1200;
+        padding: 1px 6px;
+        border-radius: 999px;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>🎾 코트 배정</h1>
+      <div class="controls">
+        <span class="seed-box" id="seedBox"></span>
+        <button class="secondary" id="settingsBtn">⚙️ 설정</button>
+        <button id="shuffleBtn">다시 섞기</button>
+      </div>
+    </header>
+    <main>
+      <div class="legend">
+        <span><i class="dot M" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--male)"></i> 남</span>
+        <span><i class="dot W" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--female)"></i> 여</span>
+        <span><i style="display:inline-block;width:12px;height:12px;border:2px solid var(--odd);border-radius:3px"></i> 홀수 코트 (남3여1 / 여3남1)</span>
+      </div>
+      <div class="legend">
+        <span class="badge md" style="padding:2px 8px">남복</span>
+        <span class="badge wd" style="padding:2px 8px">여복</span>
+        <span class="badge xd" style="padding:2px 8px">혼복</span>
+        <span class="badge odd" style="padding:2px 8px">남3여1 / 여3남1</span>
+      </div>
+      <div class="summary" id="summary"></div>
+      <div id="output"></div>
+      <div id="stats"></div>
+    </main>
+
+    <!-- 설정 모달 -->
+    <div class="modal-backdrop" id="modalBackdrop">
+      <div class="modal">
+        <h2>설정</h2>
+        <p class="hint">코트와 멤버, 라운드 수를 편집할 수 있어요. 저장하면 이 브라우저에 보관됩니다.</p>
+
+        <div class="field-row">
+          <label for="roundsInput">라운드 수</label>
+          <input type="number" id="roundsInput" min="1" max="30" />
+        </div>
+
+        <div class="section-title">
+          <span>코트</span>
+          <button class="add-btn" id="addCourtBtn">+ 코트 추가</button>
+        </div>
+        <div id="courtList"></div>
+
+        <div class="section-title">
+          <span>멤버</span>
+          <button class="add-btn" id="addMemberBtn">+ 멤버 추가</button>
+        </div>
+        <div id="memberList"></div>
+        <div class="count-note" id="countNote"></div>
+
+        <div class="modal-actions">
+          <div class="left">
+            <button class="secondary" id="resetBtn">기본값으로 초기화</button>
+            <button class="secondary" id="downloadBtn">info.json 내보내기</button>
+          </div>
+          <div class="right">
+            <button class="secondary" id="cancelBtn">취소</button>
+            <button id="saveBtn">저장</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="assign.js"></script>
+    <script>
+      const output = document.getElementById("output");
+      const summaryEl = document.getElementById("summary");
+      const seedBox = document.getElementById("seedBox");
+      let infoData = null;
+
+      function playerHTML(p) {
+        return `<div class="player"><span class="dot ${p.gender}"></span>${p.name}</div>`;
+      }
+
+      // 코트 타입에 따른 뱃지 색상 클래스
+      function badgeClass(c) {
+        if (c.odd) return "odd"; // 남3여1 / 여3남1
+        if (c.type === "남복") return "md";
+        if (c.type === "여복") return "wd";
+        if (c.type === "혼복") return "xd";
+        return "";
+      }
+
+      function render(seed) {
+        try {
+          const assignments = window.matchCourt.assignCourts(infoData, { seed });
+          seedBox.textContent = `seed: ${seed}`;
+
+          // 요약: 코트 타입 분포
+          const typeCount = {};
+          for (const round of assignments) {
+            for (const c of round.courts) {
+              typeCount[c.type] = (typeCount[c.type] || 0) + 1;
+            }
+          }
+          const m = infoData.members.filter((p) => p.gender === "M").length;
+          const w = infoData.members.filter((p) => p.gender === "W").length;
+          summaryEl.textContent =
+            `멤버 ${infoData.members.length}명 (남 ${m} / 여 ${w}), ` +
+            `코트 ${infoData.courts.length}개, 라운드 ${assignments.length}회`;
+
+          // premium 제약을 완전히 만족하지 못한 경우 경고 표시
+          if (assignments.warning) {
+            summaryEl.innerHTML =
+              summaryEl.textContent +
+              `<div class="error" style="margin-top:10px">⚠️ ${assignments.warning}</div>`;
+          }
+
+          output.innerHTML = assignments
+            .map(
+              (round) => `
+              <section class="round">
+                <h2 class="round-title">라운드 ${round.round}</h2>
+                <div class="courts">
+                  ${round.courts
+                    .map(
+                      (c) => `
+                    <div class="court ${c.odd ? "odd" : ""}">
+                      <div class="court-head">
+                        <div>
+                          <div class="court-name">${c.court}</div>
+                          <div class="court-role">${c.role}</div>
+                        </div>
+                        <span class="badge ${badgeClass(c)}">${c.type}</span>
+                      </div>
+                      <div class="teams">
+                        <div class="team">${c.teamA.map(playerHTML).join("")}</div>
+                        <span class="vs">VS</span>
+                        <div class="team">${c.teamB.map(playerHTML).join("")}</div>
+                      </div>
+                    </div>`
+                    )
+                    .join("")}
+                </div>
+              </section>`
+            )
+            .join("");
+
+          renderStats(assignments);
+        } catch (err) {
+          output.innerHTML = `<div class="error">${err.message}</div>`;
+          summaryEl.textContent = "";
+          document.getElementById("stats").innerHTML = "";
+        }
+      }
+
+      // 코트 타입을 통계용 분류로 변환 (잡복 = 홀수 코트)
+      function statCategory(c) {
+        if (c.odd) return "잡복";
+        if (c.type === "남복") return "남복";
+        if (c.type === "여복") return "여복";
+        return "혼복";
+      }
+
+      // 멤버별 게임 타입 횟수를 집계해 표로 렌더링
+      function renderStats(assignments) {
+        const cats = ["남복", "여복", "혼복", "잡복"];
+        // 이름 -> { 남복, 여복, 혼복, 잡복, game, total }
+        const table = new Map();
+        for (const p of infoData.members) {
+          table.set(p.name, { 남복: 0, 여복: 0, 혼복: 0, 잡복: 0, game: 0, total: 0 });
+        }
+
+        for (const round of assignments) {
+          for (const c of round.courts) {
+            // 랠리 코트는 게임 수 집계에서 제외하고 게임 코트만 센다.
+            if (c.role === "랠리") continue;
+            const cat = statCategory(c);
+            for (const p of [...c.teamA, ...c.teamB]) {
+              const row = table.get(p.name);
+              if (!row) continue;
+              row[cat] += 1;
+              row.game += 1;
+              row.total += 1;
+            }
+          }
+        }
+
+        const rows = infoData.members
+          .map((p) => {
+            const r = table.get(p.name);
+            const cells = cats
+              .map(
+                (cat) =>
+                  `<td class="num ${r[cat] === 0 ? "zero" : ""}">${r[cat]}</td>`
+              )
+              .join("");
+            const premiumBadge =
+              p.type === "premium"
+                ? `<span class="tag-premium">P</span>`
+                : "";
+            return `
+              <tr>
+                <td class="name">
+                  <span class="name-cell"><span class="dot ${p.gender}"></span>${p.name}${premiumBadge}</span>
+                </td>
+                ${cells}
+                <td class="total">${r.total}</td>
+              </tr>`;
+          })
+          .join("");
+
+        document.getElementById("stats").innerHTML = `
+          <h2 class="stats-title">멤버별 게임 수 <span style="font-weight:400;font-size:12px">(랠리 제외, P = premium)</span></h2>
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th style="text-align:left">멤버</th>
+                <th>남복</th>
+                <th>여복</th>
+                <th>혼복</th>
+                <th>잡복</th>
+                <th>합계</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+      }
+
+      function randomSeed() {
+        return Math.floor(Math.random() * 1e9);
+      }
+
+      document.getElementById("shuffleBtn").addEventListener("click", () => {
+        render(randomSeed());
+      });
+
+      // ---------------- 데이터 로딩 ----------------
+      const STORAGE_KEY = "matchCourt.info";
+
+      function loadFromStorage() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          return raw ? JSON.parse(raw) : null;
+        } catch {
+          return null;
+        }
+      }
+
+      function saveToStorage(data) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      }
+
+      // 저장된 설정이 있으면 그걸 쓰고, 없으면 info.json 을 불러온다.
+      function init() {
+        const stored = loadFromStorage();
+        if (stored) {
+          infoData = stored;
+          render(randomSeed());
+          return;
+        }
+        fetch("info.json")
+          .then((res) => {
+            if (!res.ok) throw new Error("info.json을 불러오지 못했습니다.");
+            return res.json();
+          })
+          .then((data) => {
+            infoData = data;
+            render(randomSeed());
+          })
+          .catch((err) => {
+            output.innerHTML = `<div class="error">${err.message}<br>로컬 파일을 직접 열면 브라우저 보안정책(CORS)으로 info.json 로드가 막힐 수 있어요. 로컬 서버(node server.js)로 열어주세요.</div>`;
+          });
+      }
+
+      // ---------------- 설정 모달 ----------------
+      const backdrop = document.getElementById("modalBackdrop");
+      const roundsInput = document.getElementById("roundsInput");
+      const courtList = document.getElementById("courtList");
+      const memberList = document.getElementById("memberList");
+      const countNote = document.getElementById("countNote");
+
+      // 모달에서 편집 중인 작업본 (저장 전까지 원본에 반영하지 않음)
+      let draft = null;
+
+      function openSettings() {
+        // 현재 데이터를 깊은 복사해 편집 작업본으로 사용
+        draft = JSON.parse(JSON.stringify(infoData));
+        // type 이 없는 멤버는 기본값 guest 로 채운다.
+        draft.members.forEach((m) => {
+          if (!m.type) m.type = "guest";
+        });
+        roundsInput.value = draft.info?.rounds ?? 1;
+        renderDraft();
+        backdrop.classList.add("open");
+      }
+
+      function closeSettings() {
+        backdrop.classList.remove("open");
+        draft = null;
+      }
+
+      function renderDraft() {
+        // 코트 목록
+        courtList.innerHTML = draft.courts
+          .map(
+            (c, i) => `
+          <div class="list-row">
+            <input data-court="${i}" data-key="name" value="${c.name ?? ""}" placeholder="코트 이름" />
+            <select data-court="${i}" data-key="role">
+              <option value="게임" ${c.role === "게임" ? "selected" : ""}>게임</option>
+              <option value="랠리" ${c.role === "랠리" ? "selected" : ""}>랠리</option>
+            </select>
+            <button class="icon-btn del" data-del-court="${i}">✕</button>
+          </div>`
+          )
+          .join("");
+
+        // 멤버 목록
+        memberList.innerHTML = draft.members
+          .map(
+            (m, i) => `
+          <div class="list-row">
+            <input data-member="${i}" data-key="name" value="${m.name ?? ""}" placeholder="이름" />
+            <select data-member="${i}" data-key="gender">
+              <option value="M" ${m.gender === "M" ? "selected" : ""}>남</option>
+              <option value="W" ${m.gender === "W" ? "selected" : ""}>여</option>
+            </select>
+            <select data-member="${i}" data-key="type">
+              <option value="premium" ${m.type === "premium" ? "selected" : ""}>premium</option>
+              <option value="guest" ${m.type === "guest" || !m.type ? "selected" : ""}>guest</option>
+            </select>
+            <button class="icon-btn del" data-del-member="${i}">✕</button>
+          </div>`
+          )
+          .join("");
+
+        updateCountNote();
+      }
+
+      function updateCountNote() {
+        const capacity = draft.courts.length * 4;
+        const total = draft.members.length;
+        const ok = capacity === total;
+        countNote.className = "count-note" + (ok ? "" : " bad");
+        countNote.textContent = ok
+          ? `멤버 ${total}명 = 코트 ${draft.courts.length}개 × 4자리. 전원 참여 가능합니다.`
+          : `⚠️ 멤버 ${total}명 ≠ 코트 수용 인원 ${capacity}명(${draft.courts.length}코트 × 4). 수가 맞아야 배정됩니다.`;
+      }
+
+      // 입력 변경을 작업본에 반영 (이벤트 위임)
+      courtList.addEventListener("input", (e) => {
+        const el = e.target;
+        const idx = el.dataset.court;
+        if (idx === undefined) return;
+        draft.courts[+idx][el.dataset.key] = el.value;
+      });
+      courtList.addEventListener("change", (e) => {
+        const el = e.target;
+        const idx = el.dataset.court;
+        if (idx === undefined) return;
+        draft.courts[+idx][el.dataset.key] = el.value;
+      });
+      courtList.addEventListener("click", (e) => {
+        const idx = e.target.dataset.delCourt;
+        if (idx === undefined) return;
+        draft.courts.splice(+idx, 1);
+        renderDraft();
+      });
+
+      memberList.addEventListener("input", (e) => {
+        const el = e.target;
+        const idx = el.dataset.member;
+        if (idx === undefined) return;
+        draft.members[+idx][el.dataset.key] = el.value;
+      });
+      memberList.addEventListener("change", (e) => {
+        const el = e.target;
+        const idx = el.dataset.member;
+        if (idx === undefined) return;
+        draft.members[+idx][el.dataset.key] = el.value;
+      });
+      memberList.addEventListener("click", (e) => {
+        const idx = e.target.dataset.delMember;
+        if (idx === undefined) return;
+        draft.members.splice(+idx, 1);
+        renderDraft();
+      });
+
+      document.getElementById("addCourtBtn").addEventListener("click", () => {
+        const n = draft.courts.length + 1;
+        draft.courts.push({
+          name: `court_${String(n).padStart(2, "0")}`,
+          role: "게임",
+        });
+        renderDraft();
+      });
+      document.getElementById("addMemberBtn").addEventListener("click", () => {
+        draft.members.push({ name: "", gender: "M", type: "guest" });
+        renderDraft();
+      });
+
+      roundsInput.addEventListener("input", () => {
+        if (!draft.info) draft.info = {};
+        draft.info.rounds = Math.max(1, Number(roundsInput.value) || 1);
+      });
+
+      document.getElementById("saveBtn").addEventListener("click", () => {
+        // 빈 이름 멤버/코트는 제외하고 저장
+        draft.members = draft.members.filter((m) => m.name.trim() !== "");
+        draft.courts = draft.courts.filter((c) => c.name.trim() !== "");
+        infoData = JSON.parse(JSON.stringify(draft));
+        saveToStorage(infoData);
+        closeSettings();
+        render(randomSeed());
+      });
+
+      document.getElementById("cancelBtn").addEventListener("click", closeSettings);
+
+      document.getElementById("resetBtn").addEventListener("click", () => {
+        if (!confirm("저장된 설정을 지우고 기본 info.json 으로 되돌릴까요?")) return;
+        localStorage.removeItem(STORAGE_KEY);
+        closeSettings();
+        init();
+      });
+
+      document.getElementById("downloadBtn").addEventListener("click", () => {
+        const data = draft
+          ? {
+              ...draft,
+              members: draft.members.filter((m) => m.name.trim() !== ""),
+              courts: draft.courts.filter((c) => c.name.trim() !== ""),
+            }
+          : infoData;
+        const blob = new Blob([JSON.stringify(data, null, 4)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "info.json";
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+
+      document.getElementById("settingsBtn").addEventListener("click", openSettings);
+      backdrop.addEventListener("click", (e) => {
+        if (e.target === backdrop) closeSettings();
+      });
+
+      init();
+    </script>
+  </body>
+</html>

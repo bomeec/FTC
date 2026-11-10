@@ -1,0 +1,57 @@
+{
+    "info" : {
+        "type" : "teniss",
+        "rounds" : 4
+    },
+    "members" : [
+        {
+            "name":"창혁", "gender":"M", "type":"premium"
+        },
+        {
+            "name":"세환", "gender":"M", "type":"premium"
+        },
+        {
+            "name":"준영", "gender":"M", "type":"premium"
+        },
+        {
+            "name":"지훈", "gender":"M", "type":"premium"
+        },
+        {
+            "name":"홍수", "gender":"M", "type":"premium"
+        },
+        {
+            "name":"보아", "gender":"W", "type":"premium"
+        },
+        {
+            "name":"동하", "gender":"W", "type":"premium"
+        },
+        {
+            "name":"유민", "gender":"W", "type":"premium"
+        },
+        {
+            "name":"게스트1", "gender":"M", "type":"guest"
+        },
+        {
+            "name":"게스트2", "gender":"M", "type":"guest"
+        },
+        {
+            "name":"게스트3", "gender":"W", "type":"guest"
+        },
+        {
+            "name":"게스트4", "gender":"W", "type":"guest"
+        }
+
+    ],
+    "courts": [
+        {
+            "name":"court_01", "role":"랠리"
+        },
+        {
+            "name":"court_02", "role":"게임"
+        },
+        {
+            "name":"court_03", "role":"게임"
+        }
+
+    ]
+}
