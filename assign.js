@@ -243,27 +243,6 @@ function generateOnce(info, options = {}) {
   const members = info?.members ?? [];
   const courts = info?.courts ?? [];
 
-  const capacity = courts.length * COURT_SIZE;
-  if (members.length !== capacity) {
-    throw new Error(
-      `멤버 수(${members.length})가 코트 수용 인원(${courts.length}코트 x ${COURT_SIZE}명 = ${capacity})과 맞지 않습니다. ` +
-        `매 라운드 쉬는 사람 없이 배정하려면 멤버 수가 ${capacity}명이어야 합니다.`
-    );
-  }
-
-  const males = members.filter((p) => p.gender === "M");
-  const females = members.filter((p) => p.gender === "W");
-
-  // 기본 계획: 홀수 코트를 최소화하는 코트별 남성 수 계획 (혼복 위주)
-  const basePlan = findGenderPlan(males.length, females.length, courts.length);
-
-  // 남복/여복을 한 번씩 포함하는 특별 계획 (전체 라운드 중 일부에만 사용)
-  const singlesPlan = findGenderPlanWithSingles(
-    males.length,
-    females.length,
-    courts.length
-  );
-
   // 역할별 코트 인덱스 (랠리 / 게임)
   const rallyCourtIdx = [];
   const gameCourtIdx = [];
@@ -272,14 +251,74 @@ function generateOnce(info, options = {}) {
     else gameCourtIdx.push(i);
   });
 
-  const rallySeats = rallyCourtIdx.length * COURT_SIZE;
-  if (rallySeats > gameCourtIdx.length * COURT_SIZE) {
-    // 랠리 참가자는 다음 라운드에 모두 게임으로 가야 하므로,
-    // 게임 좌석이 랠리 좌석보다 많아야 제약을 항상 만족할 수 있다.
+  // 게임 코트는 항상 4명(복식). 랠리 코트는 4명 이하 허용(남는 인원 흡수).
+  const gameSeats = gameCourtIdx.length * COURT_SIZE;
+  const maxCapacity = gameSeats + rallyCourtIdx.length * COURT_SIZE;
+
+  if (members.length < gameSeats) {
     throw new Error(
-      "랠리 좌석 수가 게임 좌석 수보다 많아 '랠리→다음 라운드 게임' 규칙을 보장할 수 없습니다."
+      `멤버 수(${members.length})가 게임 코트 좌석(${gameCourtIdx.length}코트 × ${COURT_SIZE} = ${gameSeats})보다 적습니다. ` +
+        `게임 코트는 4명이 꽉 차야 하므로 최소 ${gameSeats}명이 필요합니다.`
     );
   }
+  if (members.length > maxCapacity) {
+    throw new Error(
+      `멤버 수(${members.length})가 최대 수용 인원(${maxCapacity}명)을 초과합니다. ` +
+        `코트를 늘리거나 멤버를 줄여주세요.`
+    );
+  }
+
+  // 랠리 코트에 들어갈 총 인원 (게임 좌석을 채우고 남는 인원).
+  // 0 이면 이 라운드에 랠리 코트는 운영하지 않는다.
+  const rallyTotal = members.length - gameSeats; // 0 ~ rallyCourtIdx.length*4
+  const useRally = rallyTotal > 0 && rallyCourtIdx.length > 0;
+
+  const males = members.filter((p) => p.gender === "M");
+  const females = members.filter((p) => p.gender === "W");
+
+  // --- 게임 코트 성별 계획 ---
+  // 랠리에 남녀 몇 명을 보낼지 먼저 정하고, 나머지로 게임 코트 성별 계획을 세운다.
+  // 홀수(남3여1/여3남1)를 랠리로 흡수시켜 게임 코트를 최대한 짝수 구성으로 만든다.
+  // rallyMale: 랠리에 보낼 남성 수 (0 ~ min(rallyTotal, males.length))
+  // 게임 코트 남성 수 = males.length - rallyMale, 이 값으로 findGenderPlan 가능해야 함.
+  // 가능한 (게임 코트 성별 계획, 랠리 남성 수) 후보를 모두 모은다.
+  // 랠리 남성 수(rallyMale)에 따라 게임 코트의 성별 구성이 달라진다.
+  // 라운드마다 가용 인원 상황에 맞는 후보를 골라 유연하게 배정한다.
+  function collectPlans(preferSingles) {
+    const gameCourtCount = gameCourtIdx.length;
+    const candidates = []; // { plan, rallyMale, rallyFemale, oddCount }
+    const minRM = Math.max(0, rallyTotal - females.length);
+    const maxRM = Math.min(rallyTotal, males.length);
+    for (let rallyMale = minRM; rallyMale <= maxRM; rallyMale++) {
+      const rallyFemale = rallyTotal - rallyMale;
+      const gMale = males.length - rallyMale;
+      const gFemale = females.length - rallyFemale;
+      if (gMale < 0 || gFemale < 0) continue;
+      if (gMale + gFemale !== gameCourtCount * COURT_SIZE) continue;
+      let plan;
+      if (preferSingles) {
+        plan = findGenderPlanWithSingles(gMale, gFemale, gameCourtCount);
+        if (!plan) continue;
+      } else {
+        plan = findGenderPlan(gMale, gFemale, gameCourtCount);
+      }
+      candidates.push({
+        plan,
+        rallyMale,
+        rallyFemale,
+        oddCount: plan.filter(isOddCourt).length,
+      });
+    }
+    // 게임 코트 홀수가 적은(=랠리가 홀수 흡수) 후보를 앞에 둔다.
+    candidates.sort((a, b) => a.oddCount - b.oddCount);
+    return candidates;
+  }
+
+  const basePlans = collectPlans(false);
+  if (basePlans.length === 0) {
+    throw new Error("현재 멤버 성비로 게임 코트 구성을 만들 수 없습니다.");
+  }
+  const singlesPlans = collectPlans(true);
 
   const seed = options.seed ?? Date.now();
   const rng = createRng(seed);
@@ -287,7 +326,7 @@ function generateOnce(info, options = {}) {
   // 전체 라운드 중 "남복+여복 포함(singlesPlan)"을 적용할 라운드를 하나 고른다.
   // 그 라운드 하나에서 남복과 여복이 동시에 등장하므로 "최소 1회씩" 조건이 충족된다.
   let singlesRound = -1;
-  if (singlesPlan && rounds >= 1) {
+  if (singlesPlans.length > 0 && rounds >= 1) {
     singlesRound = Math.floor(rng() * rounds);
   }
 
@@ -295,113 +334,114 @@ function generateOnce(info, options = {}) {
   let prevRallyNames = new Set(); // 직전 라운드에 랠리 코트에 있던 사람 이름
 
   for (let r = 0; r < rounds; r++) {
-    // 이 라운드에 사용할 성별 계획을 고른다.
-    const planForRound = r === singlesRound ? singlesPlan : basePlan;
+    // 이 라운드에 사용할 게임 코트 성별 계획 후보를 고른다.
+    const useSingles = r === singlesRound && singlesPlans.length > 0;
+    const pool = useSingles ? singlesPlans : basePlans;
+    // 후보 중 하나를 라운드마다 랜덤 선택(시드에 따라 달라짐 → 재시도 시 다양성 확보).
+    const pick = pool[Math.floor(rng() * pool.length)];
+    const gamePlan = shuffle(pick.plan, rng);
+    const rallyMale = pick.rallyMale; // 랠리에 보낼 남성 수
+    const rallyFemale = pick.rallyFemale; // 랠리에 보낼 여성 수
 
-    // 각 코트에 배정될 남성 수 계획을 라운드마다 섞는다.
-    const planOrder = shuffle(planForRound, rng);
+    // 게임 코트에 들어갈 남녀 수.
+    const gameMaleTotal = males.length - rallyMale;
+    const gameFemaleTotal = females.length - rallyFemale;
 
-    // 남녀 풀을 섞되, 랠리 코트에는 guest 를 먼저 쓰도록 정렬한다.
-    // (premium 은 게임 코트에 더 많이 두어 "게임 N회 이상" 제약을 돕는다.)
-    // 정렬 우선순위: guest 가 앞, premium 이 뒤. 같은 타입끼리는 셔플 순서 유지.
+    // --- 사람 풀 구성 ---
+    // 랠리→게임 규칙: 직전 랠리 참가자는 이번 라운드에 게임 코트로 가야 한다.
+    // 따라서 게임 코트에 직전 랠리 참가자를 "우선" 배치하고, 랠리 코트에는
+    // 직전 랠리가 아닌(allowed) 사람 중에서, guest 를 우선으로 채운다.
     const byGuestFirst = (arr) =>
       arr.slice().sort((a, b) => guestRank(a) - guestRank(b));
-    const mPool = byGuestFirst(shuffle(males, rng));
-    const wPool = byGuestFirst(shuffle(females, rng));
 
-    // 랠리 가능(직전 랠리가 아닌) 사람과 불가능(직전 랠리) 사람으로 분리.
-    const mAllowed = mPool.filter((p) => !prevRallyNames.has(p.name));
-    const mBlocked = mPool.filter((p) => prevRallyNames.has(p.name));
-    const wAllowed = wPool.filter((p) => !prevRallyNames.has(p.name));
-    const wBlocked = wPool.filter((p) => prevRallyNames.has(p.name));
+    // 게임용 우선순위(앞일수록 게임 코트에 먼저 들어감):
+    //   1) 직전 랠리 참가자 (랠리→게임 규칙상 반드시 게임)
+    //   2) premium (게임 횟수 확보를 위해 게임 선호)
+    //   3) guest (남는 자리는 랠리로 — guest 가 랠리를 더 많이 맡음)
+    const gamePriority = (p) => {
+      if (prevRallyNames.has(p.name)) return 0;
+      if (p.type === "premium") return 1;
+      return 2;
+    };
+    const orderGameFirst = (arr) =>
+      arr.slice().sort((a, b) => gamePriority(a) - gamePriority(b));
 
-    // 홀수 구성(남1/남3)을 최대한 랠리 코트로 보낸다.
-    // 단, 랠리 코트는 allowed 풀에서만 채울 수 있으므로, allowed 가용 수로 채울 수 있는
-    // 계획 값만 랠리에 배정한다. (채울 수 없으면 게임 코트로 넘김)
-    // 선호도: 홀수(남1/남3) > 그 외. 동률이면 랜덤(이미 planOrder가 섞여 있음).
-    let availM = mAllowed.length;
-    let availW = wAllowed.length;
-    const remainingPlan = planOrder.slice();
-    const rallyPlan = [];
+    const mPool = orderGameFirst(shuffle(males, rng));
+    const wPool = orderGameFirst(shuffle(females, rng));
 
-    for (let s = 0; s < rallyCourtIdx.length; s++) {
-      // 채울 수 있는 후보 인덱스 (남성 m명, 여성 4-m명이 allowed 에 남아있는지)
-      const feasible = remainingPlan
-        .map((m, idx) => ({ m, idx }))
-        .filter(({ m }) => m <= availM && COURT_SIZE - m <= availW);
-
-      if (feasible.length === 0) {
-        // 이론상 랠리 좌석 <= 게임 좌석이면 발생하지 않지만, 안전장치로 혼합값 하나 사용
-        const idx = 0;
-        const m = remainingPlan[idx];
-        rallyPlan.push(m);
-        availM -= m;
-        availW -= COURT_SIZE - m;
-        remainingPlan.splice(idx, 1);
-        continue;
-      }
-
-      // 홀수 코트를 우선 선택
-      feasible.sort((a, b) => {
-        const aOdd = isOddCourt(a.m) ? 0 : 1;
-        const bOdd = isOddCourt(b.m) ? 0 : 1;
-        return aOdd - bOdd;
-      });
-
-      const chosen = feasible[0];
-      rallyPlan.push(chosen.m);
-      availM -= chosen.m;
-      availW -= COURT_SIZE - chosen.m;
-      remainingPlan.splice(chosen.idx, 1);
-    }
-
-    // 게임 코트 계획은 나머지 값. 순서를 섞어 코트별 타입을 변화시킨다.
-    const gamePlan = shuffle(remainingPlan, rng);
-
-    const assignment = new Array(courts.length); // courtIndex -> players[]
+    const assignment = new Array(courts.length);
     const curRallyNames = new Set();
 
-    // 랠리 코트 채우기: allowed 풀에서만 뽑는다.
-    rallyCourtIdx.forEach((courtIndex, i) => {
-      const maleNeeded = rallyPlan[i];
-      const femaleNeeded = COURT_SIZE - maleNeeded;
-      const players = [
-        ...mAllowed.splice(0, maleNeeded),
-        ...wAllowed.splice(0, femaleNeeded),
-      ];
-      players.forEach((p) => curRallyNames.add(p.name));
-      assignment[courtIndex] = players;
-    });
+    // --- 1단계: 게임 코트 채우기 ---
+    // 게임 풀에서 앞에서부터 뽑는다(직전 랠리 참가자 우선).
+    const mGame = mPool.slice(0, gameMaleTotal);
+    const wGame = wPool.slice(0, gameFemaleTotal);
+    // 게임에 들어가지 않은 나머지가 랠리 후보.
+    const mRest = mPool.slice(gameMaleTotal);
+    const wRest = wPool.slice(gameFemaleTotal);
 
-    // --- 2단계: 게임 코트를 나머지 인원으로 채운다 ---
-    // 랠리에서 쓰고 남은 allowed + 랠리에 못 들어간 blocked 를 합쳐 게임 풀 구성.
-    const mGame = [...mBlocked, ...mAllowed];
-    const wGame = [...wBlocked, ...wAllowed];
-
+    const mGameQ = mGame.slice();
+    const wGameQ = wGame.slice();
     gameCourtIdx.forEach((courtIndex, i) => {
       const maleNeeded = gamePlan[i];
       const femaleNeeded = COURT_SIZE - maleNeeded;
-      const players = [
-        ...mGame.splice(0, maleNeeded),
-        ...wGame.splice(0, femaleNeeded),
+      assignment[courtIndex] = [
+        ...mGameQ.splice(0, maleNeeded),
+        ...wGameQ.splice(0, femaleNeeded),
       ];
-      assignment[courtIndex] = players;
     });
 
+    // --- 2단계: 랠리 코트 채우기 (4명 이하 허용) ---
+    // 랠리 후보(mRest+wRest)를 랠리 코트에 담는다. guest 우선.
+    const rallyPeople = byGuestFirst([...mRest, ...wRest]);
+    if (useRally) {
+      rallyCourtIdx.forEach((courtIndex, i) => {
+        // 랠리 코트가 1개인 전제: 남는 인원 전부를 한 코트에 담는다.
+        // (여러 개면 균등 분배)
+        const share = Math.ceil(rallyPeople.length / rallyCourtIdx.length);
+        const players = rallyPeople.splice(0, share);
+        players.forEach((p) => curRallyNames.add(p.name));
+        assignment[courtIndex] = players;
+      });
+    } else {
+      // 랠리 미운영: 랠리 코트에 빈 배열
+      rallyCourtIdx.forEach((courtIndex) => {
+        assignment[courtIndex] = [];
+      });
+    }
+
     // --- 결과 조립 ---
-    const roundCourts = courts.map((court, courtIndex) => {
-      const players = assignment[courtIndex];
-      const maleCount = players.filter((p) => p.gender === "M").length;
-      const { teamA, teamB } = splitTeams(players);
-      return {
-        court: court.name,
-        role: court.role,
-        type: courtTypeLabel(maleCount),
-        odd: isOddCourt(maleCount),
-        teamA,
-        teamB,
-      };
-    });
+    const roundCourts = courts
+      .map((court, courtIndex) => {
+        const players = assignment[courtIndex] || [];
+        const isRally = court.role === "랠리";
+
+        if (isRally) {
+          // 랠리 코트: 팀 분할 없이 명단만. 인원이 0이면 생략.
+          if (players.length === 0) return null;
+          return {
+            court: court.name,
+            role: court.role,
+            type: "랠리",
+            odd: false,
+            players,
+            teamA: players, // 호환성: 표시용
+            teamB: [],
+          };
+        }
+
+        const maleCount = players.filter((p) => p.gender === "M").length;
+        const { teamA, teamB } = splitTeams(players);
+        return {
+          court: court.name,
+          role: court.role,
+          type: courtTypeLabel(maleCount),
+          odd: isOddCourt(maleCount),
+          teamA,
+          teamB,
+        };
+      })
+      .filter((c) => c !== null);
 
     // 코트 이름 순으로 정렬해 출력 일관성 유지
     roundCourts.sort((a, b) => a.court.localeCompare(b.court));
@@ -468,11 +508,15 @@ function formatAssignments(assignments) {
   for (const round of assignments) {
     lines.push(`=== 라운드 ${round.round} ===`);
     for (const c of round.courts) {
+      if (c.role === "랠리") {
+        // 랠리 코트: 명단만 표시
+        const names = (c.players || c.teamA).map((p) => p.name).join(", ");
+        lines.push(`[${c.court} / ${c.role}] (${c.type}) ${names}`);
+        continue;
+      }
       const a = c.teamA.map((p) => p.name).join(", ");
       const b = c.teamB.map((p) => p.name).join(", ");
-      lines.push(
-        `[${c.court} / ${c.role}] (${c.type}) ${a}  vs  ${b}`
-      );
+      lines.push(`[${c.court} / ${c.role}] (${c.type}) ${a}  vs  ${b}`);
     }
     lines.push("");
   }

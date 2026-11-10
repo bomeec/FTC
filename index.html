@@ -99,6 +99,14 @@
       .court.odd {
         border-color: var(--odd);
       }
+      .court.rally {
+        border-style: dashed;
+      }
+      .rally-team {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
       .court-head {
         display: flex;
         justify-content: space-between;
@@ -459,6 +467,37 @@
         return "";
       }
 
+      // 코트 카드 HTML. 랠리 코트는 명단만, 게임 코트는 teamA vs teamB.
+      function courtHTML(c) {
+        const head = `
+          <div class="court-head">
+            <div>
+              <div class="court-name">${c.court}</div>
+              <div class="court-role">${c.role}</div>
+            </div>
+            <span class="badge ${badgeClass(c)}">${c.type}</span>
+          </div>`;
+
+        if (c.role === "랠리") {
+          const list = (c.players || c.teamA).map(playerHTML).join("");
+          return `
+            <div class="court rally">
+              ${head}
+              <div class="team rally-team">${list}</div>
+            </div>`;
+        }
+
+        return `
+          <div class="court ${c.odd ? "odd" : ""}">
+            ${head}
+            <div class="teams">
+              <div class="team">${c.teamA.map(playerHTML).join("")}</div>
+              <span class="vs">VS</span>
+              <div class="team">${c.teamB.map(playerHTML).join("")}</div>
+            </div>
+          </div>`;
+      }
+
       function render(seed) {
         try {
           const assignments = window.matchCourt.assignCourts(infoData, { seed });
@@ -491,23 +530,7 @@
                 <h2 class="round-title">라운드 ${round.round}</h2>
                 <div class="courts">
                   ${round.courts
-                    .map(
-                      (c) => `
-                    <div class="court ${c.odd ? "odd" : ""}">
-                      <div class="court-head">
-                        <div>
-                          <div class="court-name">${c.court}</div>
-                          <div class="court-role">${c.role}</div>
-                        </div>
-                        <span class="badge ${badgeClass(c)}">${c.type}</span>
-                      </div>
-                      <div class="teams">
-                        <div class="team">${c.teamA.map(playerHTML).join("")}</div>
-                        <span class="vs">VS</span>
-                        <div class="team">${c.teamB.map(playerHTML).join("")}</div>
-                      </div>
-                    </div>`
-                    )
+                    .map(courtHTML)
                     .join("")}
                 </div>
               </section>`
@@ -707,13 +730,30 @@
       }
 
       function updateCountNote() {
-        const capacity = draft.courts.length * 4;
+        const gameCourts = draft.courts.filter((c) => c.role !== "랠리").length;
+        const rallyCourts = draft.courts.filter((c) => c.role === "랠리").length;
+        const gameSeats = gameCourts * 4;
+        const maxCap = gameSeats + rallyCourts * 4;
         const total = draft.members.length;
-        const ok = capacity === total;
+
+        let ok = true;
+        let msg = "";
+        if (total < gameSeats) {
+          ok = false;
+          msg = `⚠️ 멤버 ${total}명이 게임 코트 좌석(${gameCourts}코트 × 4 = ${gameSeats})보다 적습니다. 최소 ${gameSeats}명 필요.`;
+        } else if (total > maxCap) {
+          ok = false;
+          msg = `⚠️ 멤버 ${total}명이 최대 수용 인원 ${maxCap}명을 초과합니다. 코트를 늘리거나 멤버를 줄여주세요.`;
+        } else {
+          const rallyPeople = total - gameSeats;
+          msg =
+            `멤버 ${total}명 — 전원 참여 가능. 게임 코트 ${gameCourts}개(각 4명)` +
+            (rallyCourts > 0
+              ? `, 랠리 코트에 ${rallyPeople}명.`
+              : ".");
+        }
         countNote.className = "count-note" + (ok ? "" : " bad");
-        countNote.textContent = ok
-          ? `멤버 ${total}명 = 코트 ${draft.courts.length}개 × 4자리. 전원 참여 가능합니다.`
-          : `⚠️ 멤버 ${total}명 ≠ 코트 수용 인원 ${capacity}명(${draft.courts.length}코트 × 4). 수가 맞아야 배정됩니다.`;
+        countNote.textContent = msg;
       }
 
       // 입력 변경을 작업본에 반영 (이벤트 위임)
