@@ -44,13 +44,13 @@
     ],
     "courts": [
         {
-            "name":"court_01", "role":"랠리"
+            "name":"court_01", "roles":["랠리","랠리","랠리","게임"]
         },
         {
-            "name":"court_02", "role":"게임"
+            "name":"court_02", "roles":["게임","게임","게임","게임"]
         },
         {
-            "name":"court_03", "role":"게임"
+            "name":"court_03", "roles":["게임","게임","게임","게임"]
         }
 
     ]
